@@ -1,123 +1,108 @@
 #!/usr/bin/env python3
 """
-Streamlit app to serve a pre-trained scikit-learn model for Loan Eligibility prediction.
-- Works with models/leader_model.pkl
-- Dynamically matches input to the model's expected features
+Streamlit app to serve the H2O model for Loan Eligibility prediction.
+- Loads the best model path from models/best_model_path.txt (written by train_h2o.py).
+- Lets users enter features manually or upload a CSV for batch scoring.
 """
-
 import os
 import pandas as pd
 import streamlit as st
-import joblib
+import h2o
 
-APP_TITLE = "🏦 Loan Eligibility (Fixed Version)"
-MODEL_PATH = os.path.join("models", "leader_model.pkl")
+APP_TITLE = "🏦 Loan Eligibility (H2O + Streamlit)"
+MODEL_DIR = os.environ.get("MODEL_DIR", "models")
+BEST_MODEL_POINTER = os.path.join(MODEL_DIR, "best_model_path.txt")
+
+@st.cache_resource(show_spinner=False)
+def init_h2o(max_mem="2G"):
+    # Bind to localhost; Spaces will only expose Streamlit externally
+    h2o.init(nthreads=-1, max_mem_size=max_mem, ip="127.0.0.1", port=54321)
+    return True
 
 @st.cache_resource(show_spinner=False)
 def load_model():
-    if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(f"Could not find '{MODEL_PATH}'. Train the model first.")
-    model = joblib.load(MODEL_PATH)
+    if not os.path.exists(BEST_MODEL_POINTER):
+        raise FileNotFoundError(f"Could not find '{BEST_MODEL_POINTER}'. Train the model first.")
+    with open(BEST_MODEL_POINTER, "r") as f:
+        model_path = f.read().strip()
+    model = h2o.load_model(model_path)
     return model
 
-@st.cache_resource(show_spinner=False)
-def get_model_columns():
-    model = load_model()
-    return list(model.feature_names_in_)
-
-def preprocess_input(df: pd.DataFrame):
-    """Preprocess input to match training schema (one-hot encoding + missing columns)."""
-    df = df.copy()
-
-    # Map '3+' to 3 in Dependents
-    if "Dependents" in df.columns:
-        df["Dependents"] = df["Dependents"].replace("3+", 3).astype(int)
-
-    # Identify numeric columns (assumes common numeric features)
-    numeric_cols = ["ApplicantIncome", "CoapplicantIncome", "LoanAmount", "Loan_Amount_Term", "Credit_History", "Dependents"]
-    cat_cols = [col for col in df.columns if col not in numeric_cols]
-
-    # One-hot encode categorical columns
-    df = pd.get_dummies(df, columns=cat_cols, drop_first=False)
-
-    # Fill missing columns with zeros to match model
-    model_columns = get_model_columns()
-    for col in model_columns:
-        if col not in df.columns:
-            df[col] = 0
-
-    # Reorder columns to match model
-    df = df[model_columns]
-    return df
-
 def predict_df(model, df: pd.DataFrame):
-    df_processed = preprocess_input(df)
-    preds = model.predict(df_processed)
-    preds_df = pd.DataFrame({"predict": preds})
-    try:
-        proba = model.predict_proba(df_processed)
-        for i, class_label in enumerate(model.classes_):
-            preds_df[f"p_{class_label}"] = proba[:, i]
-    except AttributeError:
-        pass
-    return preds_df
+    # Convert pandas DataFrame to H2OFrame for prediction
+    hf = h2o.H2OFrame(df)
+    preds = model.predict(hf).as_data_frame()
+    return preds
 
 def main():
-    st.set_page_config(page_title="Loan Eligibility", layout="wide")
+    st.set_page_config(page_title="Loan Eligibility (H2O)", layout="wide")
     st.title(APP_TITLE)
-    st.caption("Enter features or upload a CSV to get predictions. Input is matched automatically to the model's features.")
+    st.caption("Powered by H2O AutoML. Enter features below or upload a CSV to get predictions.")
 
+    # Start H2O & load the model
+    init_h2o(max_mem=os.environ.get("H2O_MAX_MEM", "2G"))
     model = load_model()
-    model_columns = get_model_columns()
 
     # Sidebar: batch scoring
     st.sidebar.header("📦 Batch scoring")
-    batch_file = st.sidebar.file_uploader("Upload CSV (exclude target)", type=["csv"])
-    if batch_file:
+    batch_file = st.sidebar.file_uploader("Upload CSV with the same feature columns as training data (excluding target).", type=["csv"])
+    if batch_file is not None:
         batch_df = pd.read_csv(batch_file)
         st.sidebar.write("Preview:", batch_df.head())
         if st.sidebar.button("Run batch predictions"):
             preds = predict_df(model, batch_df)
             out = pd.concat([batch_df.reset_index(drop=True), preds], axis=1)
             st.write("Batch predictions:", out.head(20))
+            out_path = "predictions.csv"
+            out.to_csv(out_path, index=False)
             st.download_button("Download predictions.csv", data=out.to_csv(index=False), file_name="predictions.csv")
 
     st.divider()
     st.subheader("🧮 Single prediction")
 
-    # Dynamically generate UI based on model columns
-    input_data = {}
-    numeric_defaults = {
-        "ApplicantIncome": 5000,
-        "CoapplicantIncome": 0,
-        "LoanAmount": 128,
-        "Loan_Amount_Term": 360,
-        "Credit_History": 1.0,
-        "Dependents": "0"
+    # Build simple UI using known columns from the popular dataset
+    # Categorical inputs
+    gender = st.selectbox("Gender", ["Male", "Female"])
+    married = st.selectbox("Married", ["Yes", "No"])
+    dependents = st.selectbox("Dependents", ["0", "1", "2", "3+"])
+    education = st.selectbox("Education", ["Graduate", "Not Graduate"])
+    self_employed = st.selectbox("Self_Employed", ["Yes", "No"])
+    property_area = st.selectbox("Property_Area", ["Urban", "Semiurban", "Rural"])
+
+    # Numeric inputs
+    applicant_income = st.number_input("ApplicantIncome", min_value=0, value=5000, step=100)
+    coapplicant_income = st.number_input("CoapplicantIncome", min_value=0, value=0, step=100)
+    loan_amount = st.number_input("LoanAmount (in thousands)", min_value=0, value=128, step=1)
+    loan_amount_term = st.number_input("Loan_Amount_Term (in days)", min_value=12, value=360, step=12)
+    credit_history = st.selectbox("Credit_History", [1.0, 0.0])
+
+    # Assemble row
+    row = {
+        "Gender": gender,
+        "Married": married,
+        "Dependents": dependents,
+        "Education": education,
+        "Self_Employed": self_employed,
+        "ApplicantIncome": applicant_income,
+        "CoapplicantIncome": coapplicant_income,
+        "LoanAmount": loan_amount,
+        "Loan_Amount_Term": loan_amount_term,
+        "Credit_History": float(credit_history),
+        "Property_Area": property_area,
+        # Note: Loan_ID and Loan_Status are omitted for prediction
     }
-
-    for col in model_columns:
-        # Skip one-hot dummy columns (they will be created automatically)
-        if "_" in col and col not in numeric_defaults:
-            continue
-        if col in numeric_defaults:
-            input_data[col] = st.number_input(col, min_value=0, value=numeric_defaults[col], step=100)
-        else:
-            # Provide a selectbox for categorical columns
-            # If you know the original categories, replace with correct list
-            input_data[col] = st.selectbox(col, ["Option1", "Option2", "Option3"], index=0)
-
-    input_df = pd.DataFrame([input_data])
+    input_df = pd.DataFrame([row])
 
     if st.button("Predict eligibility"):
         preds = predict_df(model, input_df)
+        # H2O returns 'predict' (class) and class probabilities like 'p0', 'p1' (names may vary)
         st.metric("Prediction", preds.iloc[0]["predict"])
         st.write("Raw prediction output:", preds)
 
     with st.expander("Show input row as DataFrame"):
         st.dataframe(input_df)
 
-    st.info("Preprocessing ensures your input always matches the model's expected features.")
+    st.info("Tip: If you trained with a different schema, make sure to update the UI fields or upload a CSV for batch scoring.")
 
 if __name__ == "__main__":
     main()
