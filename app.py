@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
 Streamlit app to serve the H2O model for Loan Eligibility prediction.
-- Loads the best model from leader_model.pkl (written by train_h2o.py).
+- Loads the best model path from models/best_model_path.txt (written by train_h2o.py).
 - Lets users enter features manually or upload a CSV for batch scoring.
 """
 import os
 import pandas as pd
 import streamlit as st
 import h2o
-import pickle
 
 APP_TITLE = "🏦 Loan Eligibility (H2O + Streamlit)"
 MODEL_DIR = os.environ.get("MODEL_DIR", "models")
-PICKLE_MODEL_PATH = os.path.join(MODEL_DIR, "leader_model.pkl")
+BEST_MODEL_POINTER = os.path.join(MODEL_DIR, "best_model_path.txt")
 
 @st.cache_resource(show_spinner=False)
 def init_h2o(max_mem="2G"):
@@ -21,12 +20,11 @@ def init_h2o(max_mem="2G"):
     return True
 
 @st.cache_resource(show_spinner=False)
-def load_model_from_pickle():
-    if not os.path.exists(PICKLE_MODEL_PATH):
-        raise FileNotFoundError(f"Could not find '{PICKLE_MODEL_PATH}'. Train the model first.")
-    with open(PICKLE_MODEL_PATH, "rb") as f:
-        model_info = pickle.load(f)
-    model_path = model_info["model_path"]
+def load_model():
+    if not os.path.exists(BEST_MODEL_POINTER):
+        raise FileNotFoundError(f"Could not find '{BEST_MODEL_POINTER}'. Train the model first.")
+    with open(BEST_MODEL_POINTER, "r") as f:
+        model_path = f.read().strip()
     model = h2o.load_model(model_path)
     return model
 
@@ -41,9 +39,9 @@ def main():
     st.title(APP_TITLE)
     st.caption("Powered by H2O AutoML. Enter features below or upload a CSV to get predictions.")
 
-    # Start H2O & load the model from pickle
+    # Start H2O & load the model
     init_h2o(max_mem=os.environ.get("H2O_MAX_MEM", "2G"))
-    model = load_model_from_pickle()
+    model = load_model()
 
     # Sidebar: batch scoring
     st.sidebar.header("📦 Batch scoring")
@@ -55,12 +53,15 @@ def main():
             preds = predict_df(model, batch_df)
             out = pd.concat([batch_df.reset_index(drop=True), preds], axis=1)
             st.write("Batch predictions:", out.head(20))
+            out_path = "predictions.csv"
+            out.to_csv(out_path, index=False)
             st.download_button("Download predictions.csv", data=out.to_csv(index=False), file_name="predictions.csv")
 
     st.divider()
     st.subheader("🧮 Single prediction")
 
-    # Build simple UI using known columns
+    # Build simple UI using known columns from the popular dataset
+    # Categorical inputs
     gender = st.selectbox("Gender", ["Male", "Female"])
     married = st.selectbox("Married", ["Yes", "No"])
     dependents = st.selectbox("Dependents", ["0", "1", "2", "3+"])
@@ -88,11 +89,13 @@ def main():
         "Loan_Amount_Term": loan_amount_term,
         "Credit_History": float(credit_history),
         "Property_Area": property_area,
+        # Note: Loan_ID and Loan_Status are omitted for prediction
     }
     input_df = pd.DataFrame([row])
 
     if st.button("Predict eligibility"):
         preds = predict_df(model, input_df)
+        # H2O returns 'predict' (class) and class probabilities like 'p0', 'p1' (names may vary)
         st.metric("Prediction", preds.iloc[0]["predict"])
         st.write("Raw prediction output:", preds)
 
