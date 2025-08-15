@@ -2,7 +2,7 @@
 """
 Streamlit app to serve a pre-trained scikit-learn model for Loan Eligibility prediction.
 - Loads models/leader_model.pkl (saved locally).
-- Lets users enter features manually or upload a CSV for batch scoring.
+- Ensures preprocessing matches training (one-hot encoding + numeric features).
 """
 
 import os
@@ -10,32 +10,44 @@ import pandas as pd
 import streamlit as st
 import joblib
 
-APP_TITLE = "🏦 Loan Eligibility (Java-Free Version)"
-MODEL_PATH = os.environ.get("MODEL_PATH", os.path.join("models", "leader_model.pkl"))
+APP_TITLE = "🏦 Loan Eligibility (H2O -> scikit-learn)"
+MODEL_PATH = os.path.join("models", "leader_model.pkl")
 
 @st.cache_resource(show_spinner=False)
 def load_model():
     if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(f"Could not find '{MODEL_PATH}'. Train the model first and save it in models/leader_model.pkl.")
+        raise FileNotFoundError(f"Could not find '{MODEL_PATH}'. Train the model first.")
     model = joblib.load(MODEL_PATH)
     return model
 
 def preprocess_input(df: pd.DataFrame):
-    """Convert categorical inputs to numeric format expected by the model."""
+    """Preprocess input to match training schema (one-hot encoding for categoricals)."""
     df = df.copy()
-    df["Gender"] = df["Gender"].map({"Male": 1, "Female": 0})
-    df["Married"] = df["Married"].map({"Yes": 1, "No": 0})
-    df["Education"] = df["Education"].map({"Graduate": 1, "Not Graduate": 0})
-    df["Self_Employed"] = df["Self_Employed"].map({"Yes": 1, "No": 0})
-    df["Property_Area"] = df["Property_Area"].map({"Urban": 2, "Semiurban": 1, "Rural": 0})
+
+    # Map '3+' to 3 in Dependents
     df["Dependents"] = df["Dependents"].replace("3+", 3).astype(int)
+
+    # One-hot encode categorical columns
+    cat_cols = ["Gender", "Married", "Education", "Self_Employed", "Property_Area"]
+    df = pd.get_dummies(df, columns=cat_cols)
+
+    # Ensure all columns the model expects are present
+    model_columns = load_model().feature_names_in_
+    for col in model_columns:
+        if col not in df.columns:
+            df[col] = 0  # Missing column -> fill with 0
+
+    # Reorder columns to match training
+    df = df[model_columns]
+
     return df
 
 def predict_df(model, df: pd.DataFrame):
-    preds = model.predict(df)
+    df_processed = preprocess_input(df)
+    preds = model.predict(df_processed)
     proba = None
     try:
-        proba = model.predict_proba(df)
+        proba = model.predict_proba(df_processed)
     except AttributeError:
         pass
     preds_df = pd.DataFrame({"predict": preds})
@@ -47,22 +59,18 @@ def predict_df(model, df: pd.DataFrame):
 def main():
     st.set_page_config(page_title="Loan Eligibility", layout="wide")
     st.title(APP_TITLE)
-    st.caption("Powered by a pre-trained model. Enter features below or upload a CSV to get predictions.")
+    st.caption("Enter features or upload a CSV to get predictions. Preprocessing matches training pipeline.")
 
-    # Load the model
     model = load_model()
 
-    # Sidebar: batch scoring
+    # Batch scoring
     st.sidebar.header("📦 Batch scoring")
-    batch_file = st.sidebar.file_uploader(
-        "Upload CSV with the same feature columns as training data (excluding target).", type=["csv"]
-    )
-    if batch_file is not None:
+    batch_file = st.sidebar.file_uploader("Upload CSV with same features as training (no target).", type=["csv"])
+    if batch_file:
         batch_df = pd.read_csv(batch_file)
         st.sidebar.write("Preview:", batch_df.head())
         if st.sidebar.button("Run batch predictions"):
-            processed_batch = preprocess_input(batch_df)
-            preds = predict_df(model, processed_batch)
+            preds = predict_df(model, batch_df)
             out = pd.concat([batch_df.reset_index(drop=True), preds], axis=1)
             st.write("Batch predictions:", out.head(20))
             st.download_button("Download predictions.csv", data=out.to_csv(index=False), file_name="predictions.csv")
@@ -70,22 +78,19 @@ def main():
     st.divider()
     st.subheader("🧮 Single prediction")
 
-    # Categorical inputs
+    # UI inputs
     gender = st.selectbox("Gender", ["Male", "Female"])
     married = st.selectbox("Married", ["Yes", "No"])
     dependents = st.selectbox("Dependents", ["0", "1", "2", "3+"])
     education = st.selectbox("Education", ["Graduate", "Not Graduate"])
     self_employed = st.selectbox("Self_Employed", ["Yes", "No"])
     property_area = st.selectbox("Property_Area", ["Urban", "Semiurban", "Rural"])
-
-    # Numeric inputs
     applicant_income = st.number_input("ApplicantIncome", min_value=0, value=5000, step=100)
     coapplicant_income = st.number_input("CoapplicantIncome", min_value=0, value=0, step=100)
     loan_amount = st.number_input("LoanAmount (in thousands)", min_value=0, value=128, step=1)
     loan_amount_term = st.number_input("Loan_Amount_Term (in days)", min_value=12, value=360, step=12)
     credit_history = st.selectbox("Credit_History", [1.0, 0.0])
 
-    # Assemble row
     row = {
         "Gender": gender,
         "Married": married,
@@ -102,15 +107,14 @@ def main():
     input_df = pd.DataFrame([row])
 
     if st.button("Predict eligibility"):
-        processed_input = preprocess_input(input_df)
-        preds = predict_df(model, processed_input)
+        preds = predict_df(model, input_df)
         st.metric("Prediction", preds.iloc[0]["predict"])
         st.write("Raw prediction output:", preds)
 
     with st.expander("Show input row as DataFrame"):
         st.dataframe(input_df)
 
-    st.info("Tip: Ensure models/leader_model.pkl was trained with the same schema as the UI fields or the uploaded CSV.")
+    st.info("Preprocessing matches model training. Ensure CSV uploads use same feature names.")
 
 if __name__ == "__main__":
     main()
