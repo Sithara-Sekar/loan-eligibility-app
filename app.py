@@ -1,38 +1,49 @@
 #!/usr/bin/env python3
 """
-Streamlit app to serve a pickled model for Loan Eligibility prediction.
-- Loads the model from leader_model.pkl.
+Streamlit app to serve the H2O model for Loan Eligibility prediction.
+- Loads the best model from leader_model.pkl (written by train_h2o.py).
 - Lets users enter features manually or upload a CSV for batch scoring.
 """
 import os
 import pandas as pd
 import streamlit as st
+import h2o
 import pickle
 
-APP_TITLE = "🏦 Loan Eligibility (Pickle + Streamlit)"
+APP_TITLE = "🏦 Loan Eligibility (H2O + Streamlit)"
 MODEL_DIR = os.environ.get("MODEL_DIR", "models")
 PICKLE_MODEL_PATH = os.path.join(MODEL_DIR, "leader_model.pkl")
 
 @st.cache_resource(show_spinner=False)
-def load_model():
+def init_h2o(max_mem="2G"):
+    # Bind to localhost; Spaces will only expose Streamlit externally
+    h2o.init(nthreads=-1, max_mem_size=max_mem, ip="127.0.0.1", port=54321)
+    return True
+
+@st.cache_resource(show_spinner=False)
+def load_model_from_pickle():
     if not os.path.exists(PICKLE_MODEL_PATH):
         raise FileNotFoundError(f"Could not find '{PICKLE_MODEL_PATH}'. Train the model first.")
     with open(PICKLE_MODEL_PATH, "rb") as f:
-        model = pickle.load(f)
+        model_info = pickle.load(f)
+    model_path = model_info["model_path"]
+    model = h2o.load_model(model_path)
     return model
 
 def predict_df(model, df: pd.DataFrame):
-    preds = model.predict(df)
-    # If model provides probability, you can also add: model.predict_proba(df)
-    return pd.DataFrame({"Prediction": preds})
+    # Convert pandas DataFrame to H2OFrame for prediction
+    hf = h2o.H2OFrame(df)
+    preds = model.predict(hf).as_data_frame()
+    return preds
 
 def main():
-    st.set_page_config(page_title="Loan Eligibility (Pickle)", layout="wide")
+    st.set_page_config(page_title="Loan Eligibility (H2O)", layout="wide")
     st.title(APP_TITLE)
-    st.caption("Enter features manually or upload a CSV to get predictions.")
+    st.caption("Powered by H2O AutoML. Enter features below or upload a CSV to get predictions.")
 
-    # Load model
-    model = load_model()
+    # Start H2O & load the model from pickle
+    init_h2o(max_mem=os.environ.get("H2O_MAX_MEM", "2G"))
+    model = load_model_from_pickle()
 
     # Sidebar: batch scoring
     st.sidebar.header("📦 Batch scoring")
@@ -82,13 +93,13 @@ def main():
 
     if st.button("Predict eligibility"):
         preds = predict_df(model, input_df)
-        st.metric("Prediction", preds.iloc[0]["Prediction"])
+        st.metric("Prediction", preds.iloc[0]["predict"])
         st.write("Raw prediction output:", preds)
 
     with st.expander("Show input row as DataFrame"):
         st.dataframe(input_df)
 
-    st.info("Tip: Make sure the input columns match what the model expects.")
+    st.info("Tip: If you trained with a different schema, make sure to update the UI fields or upload a CSV for batch scoring.")
 
 if __name__ == "__main__":
     main()
