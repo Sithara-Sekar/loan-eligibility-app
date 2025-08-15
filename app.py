@@ -19,7 +19,15 @@ def load_model():
         st.error(f"Could not find '{MODEL_PATH}'. Please ensure the model file exists.")
         raise FileNotFoundError(f"Could not find '{MODEL_PATH}'. Train the model first.")
     try:
-        model = joblib.load(MODEL_PATH)
+        obj = joblib.load(MODEL_PATH)
+        if isinstance(obj, dict):
+            model = obj.get("model")  # Adjust key based on your pickle file’s structure
+            if model is None:
+                raise ValueError("No scikit-learn model found in the dictionary.")
+        else:
+            model = obj
+        if not hasattr(model, "predict"):
+            raise ValueError("Loaded object is not a valid scikit-learn model.")
         return model
     except Exception as e:
         st.error(f"Failed to load model: {str(e)}")
@@ -29,7 +37,6 @@ def preprocess_input(df: pd.DataFrame):
     """Preprocess input to match training schema (one-hot encoding for categoricals)."""
     try:
         df = df.copy()
-        # Validate Dependents
         valid_dependents = ["0", "1", "2", "3+"]
         if not df["Dependents"].isin(valid_dependents).all():
             raise ValueError(f"Dependents must be one of: {', '.join(valid_dependents)}")
@@ -39,13 +46,21 @@ def preprocess_input(df: pd.DataFrame):
         cat_cols = ["Gender", "Married", "Education", "Self_Employed", "Property_Area"]
         df = pd.get_dummies(df, columns=cat_cols)
 
-        # Ensure all columns the model expects are present
-        model_columns = load_model().feature_names_in_
+        # Use model’s feature_names_in_ if available, else fallback to hardcoded list
+        model = load_model()
+        if hasattr(model, "feature_names_in_"):
+            model_columns = model.feature_names_in_
+        else:
+            st.warning("Model lacks feature_names_in_. Using hardcoded feature names.")
+            model_columns = [
+                "Dependents", "ApplicantIncome", "CoapplicantIncome", "LoanAmount", "Loan_Amount_Term",
+                "Credit_History", "Gender_Female", "Gender_Male", "Married_No", "Married_Yes",
+                "Education_Graduate", "Education_Not Graduate", "Self_Employed_No", "Self_Employed_Yes",
+                "Property_Area_Rural", "Property_Area_Semiurban", "Property_Area_Urban"
+            ]
         for col in model_columns:
             if col not in df.columns:
-                df[col] = 0  # Missing column -> fill with 0
-
-        # Reorder columns to match training
+                df[col] = 0
         df = df[model_columns]
         return df
     except Exception as e:
@@ -78,7 +93,7 @@ def main():
     try:
         model = load_model()
     except Exception:
-        return  # Stop execution if model loading fails
+        return
 
     # Batch scoring
     st.sidebar.header("📦 Batch scoring")
