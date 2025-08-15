@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Streamlit app to serve a pre-trained scikit-learn model for Loan Eligibility prediction.
-- Automatically matches preprocessing to the model's expected columns.
+- Loads models/leader_model.pkl (saved locally).
+- Ensures preprocessing matches training (one-hot encoding + numeric features).
 """
 
 import os
@@ -9,7 +10,7 @@ import pandas as pd
 import streamlit as st
 import joblib
 
-APP_TITLE = "🏦 Loan Eligibility (Dynamic Columns)"
+APP_TITLE = "🏦 Loan Eligibility (H2O -> scikit-learn)"
 MODEL_PATH = os.path.join("models", "leader_model.pkl")
 
 @st.cache_resource(show_spinner=False)
@@ -19,33 +20,26 @@ def load_model():
     model = joblib.load(MODEL_PATH)
     return model
 
-@st.cache_resource(show_spinner=False)
-def get_model_columns():
-    model = load_model()
-    return list(model.feature_names_in_)
-
 def preprocess_input(df: pd.DataFrame):
-    """Preprocess input to match training schema (one-hot encoding + missing columns)."""
+    """Preprocess input to match training schema (one-hot encoding for categoricals)."""
     df = df.copy()
-    # Map '3+' to 3 in Dependents
-    if "Dependents" in df.columns:
-        df["Dependents"] = df["Dependents"].replace("3+", 3).astype(int)
 
-    # Identify categorical columns (exclude numeric)
-    numeric_cols = ["ApplicantIncome", "CoapplicantIncome", "LoanAmount", "Loan_Amount_Term", "Credit_History", "Dependents"]
-    cat_cols = [col for col in df.columns if col not in numeric_cols]
+    # Map '3+' to 3 in Dependents
+    df["Dependents"] = df["Dependents"].replace("3+", 3).astype(int)
 
     # One-hot encode categorical columns
+    cat_cols = ["Gender", "Married", "Education", "Self_Employed", "Property_Area"]
     df = pd.get_dummies(df, columns=cat_cols)
 
-    # Add missing columns expected by the model
-    model_columns = get_model_columns()
+    # Ensure all columns the model expects are present
+    model_columns = load_model().feature_names_in_
     for col in model_columns:
         if col not in df.columns:
-            df[col] = 0
+            df[col] = 0  # Missing column -> fill with 0
 
     # Reorder columns to match training
     df = df[model_columns]
+
     return df
 
 def predict_df(model, df: pd.DataFrame):
@@ -65,13 +59,13 @@ def predict_df(model, df: pd.DataFrame):
 def main():
     st.set_page_config(page_title="Loan Eligibility", layout="wide")
     st.title(APP_TITLE)
-    st.caption("Enter features or upload a CSV to get predictions. Column order is detected automatically from the model.")
+    st.caption("Enter features or upload a CSV to get predictions. Preprocessing matches training pipeline.")
 
     model = load_model()
 
-    # Sidebar: batch scoring
+    # Batch scoring
     st.sidebar.header("📦 Batch scoring")
-    batch_file = st.sidebar.file_uploader("Upload CSV with the same features as training (no target).", type=["csv"])
+    batch_file = st.sidebar.file_uploader("Upload CSV with same features as training (no target).", type=["csv"])
     if batch_file:
         batch_df = pd.read_csv(batch_file)
         st.sidebar.write("Preview:", batch_df.head())
@@ -84,29 +78,33 @@ def main():
     st.divider()
     st.subheader("🧮 Single prediction")
 
-    # Dynamically generate input fields based on model columns
-    input_data = {}
-    numeric_defaults = {
-        "ApplicantIncome": 5000,
-        "CoapplicantIncome": 0,
-        "LoanAmount": 128,
-        "Loan_Amount_Term": 360,
-        "Credit_History": 1.0,
-        "Dependents": "0"
+    # UI inputs
+    gender = st.selectbox("Gender", ["Male", "Female"])
+    married = st.selectbox("Married", ["Yes", "No"])
+    dependents = st.selectbox("Dependents", ["0", "1", "2", "3+"])
+    education = st.selectbox("Education", ["Graduate", "Not Graduate"])
+    self_employed = st.selectbox("Self_Employed", ["Yes", "No"])
+    property_area = st.selectbox("Property_Area", ["Urban", "Semiurban", "Rural"])
+    applicant_income = st.number_input("ApplicantIncome", min_value=0, value=5000, step=100)
+    coapplicant_income = st.number_input("CoapplicantIncome", min_value=0, value=0, step=100)
+    loan_amount = st.number_input("LoanAmount (in thousands)", min_value=0, value=128, step=1)
+    loan_amount_term = st.number_input("Loan_Amount_Term (in days)", min_value=12, value=360, step=12)
+    credit_history = st.selectbox("Credit_History", [1.0, 0.0])
+
+    row = {
+        "Gender": gender,
+        "Married": married,
+        "Dependents": dependents,
+        "Education": education,
+        "Self_Employed": self_employed,
+        "ApplicantIncome": applicant_income,
+        "CoapplicantIncome": coapplicant_income,
+        "LoanAmount": loan_amount,
+        "Loan_Amount_Term": loan_amount_term,
+        "Credit_History": float(credit_history),
+        "Property_Area": property_area,
     }
-
-    for col in get_model_columns():
-        # Skip one-hot dummy columns
-        if "_" in col and col not in numeric_defaults:
-            continue
-        if col in numeric_defaults:
-            input_data[col] = st.number_input(col, min_value=0, value=numeric_defaults[col], step=100)
-        else:
-            # Provide a selectbox for categorical columns
-            # Fallback: just let user type value if unknown
-            input_data[col] = st.text_input(col, value="")
-
-    input_df = pd.DataFrame([input_data])
+    input_df = pd.DataFrame([row])
 
     if st.button("Predict eligibility"):
         preds = predict_df(model, input_df)
@@ -116,7 +114,7 @@ def main():
     with st.expander("Show input row as DataFrame"):
         st.dataframe(input_df)
 
-    st.info("Input preprocessing dynamically matches the model's expected columns.")
+    st.info("Preprocessing matches model training. Ensure CSV uploads use same feature names.")
 
 if __name__ == "__main__":
     main()
