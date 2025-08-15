@@ -11,7 +11,7 @@ import streamlit as st
 import joblib
 
 APP_TITLE = "🏦 Loan Eligibility (Java-Free Version)"
-MODEL_PATH = os.environ.get("MODEL_PATH", "leader_model.pkl")
+MODEL_PATH = os.environ.get("MODEL_PATH", os.path.join("models", "leader_model.pkl"))
 
 @st.cache_resource(show_spinner=False)
 def load_model():
