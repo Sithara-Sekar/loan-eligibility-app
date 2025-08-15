@@ -111,4 +111,27 @@ def main():
 
     for col in model_columns:
         # Skip one-hot encoded dummy columns
-        if "_" in col and col_
+        if "_" in col and col not in numeric_defaults:
+            continue
+        if col in numeric_defaults:
+            input_data[col] = st.number_input(col, min_value=0, value=numeric_defaults[col], step=100)
+        elif col in cat_options:
+            input_data[col] = st.selectbox(col, cat_options[col])
+        else:
+            # Generic placeholder if categories not found
+            input_data[col] = st.text_input(col, value="Option1")
+
+    input_df = pd.DataFrame([input_data])
+
+    if st.button("Predict eligibility"):
+        preds = predict_df(model, input_df)
+        st.metric("Prediction", preds.iloc[0]["predict"])
+        st.write("Raw prediction output:", preds)
+
+    with st.expander("Show input row as DataFrame"):
+        st.dataframe(input_df)
+
+    st.info("The app automatically preprocesses inputs to match the trained model.")
+
+if __name__ == "__main__":
+    main()
