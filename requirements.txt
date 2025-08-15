@@ -1,3 +1,4 @@
 streamlit==1.29.0
 pandas==2.1.1
 h2o==3.42.0.3
+joblib
