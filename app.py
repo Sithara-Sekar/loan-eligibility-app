@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
 Streamlit app to serve a pre-trained scikit-learn model for Loan Eligibility prediction.
-- Works with models/leader_model.pkl
-- Dynamically matches input to the model's expected features
+- Automatically detects categorical options from the trained model.
+- Supports batch CSV and single-row input.
 """
 
 import os
 import pandas as pd
 import streamlit as st
 import joblib
+import numpy as np
 
-APP_TITLE = "🏦 Loan Eligibility (Fixed Version)"
+APP_TITLE = "🏦 Loan Eligibility (Auto-Categorical)"
 MODEL_PATH = os.path.join("models", "leader_model.pkl")
 
 @st.cache_resource(show_spinner=False)
@@ -22,31 +23,42 @@ def load_model():
 
 @st.cache_resource(show_spinner=False)
 def get_model_columns():
+    """Return the model's feature names"""
     model = load_model()
     return list(model.feature_names_in_)
 
-def preprocess_input(df: pd.DataFrame):
-    """Preprocess input to match training schema (one-hot encoding + missing columns)."""
-    df = df.copy()
+@st.cache_resource(show_spinner=False)
+def get_categorical_options():
+    """Return dict: categorical column -> list of categories"""
+    model = load_model()
+    cat_cols = {}
+    # Try to detect categories if model has a preprocessor
+    if hasattr(model, "named_steps") and "preprocessor" in model.named_steps:
+        preprocessor = model.named_steps["preprocessor"]
+        if hasattr(preprocessor, "transformers_"):
+            for name, transformer, columns in preprocessor.transformers_:
+                if transformer.__class__.__name__ == "OneHotEncoder":
+                    categories = transformer.categories_
+                    for col, cats in zip(columns, categories):
+                        cat_cols[col] = list(cats)
+    # Fallback: just return generic placeholder options
+    return cat_cols
 
-    # Map '3+' to 3 in Dependents
+def preprocess_input(df: pd.DataFrame):
+    df = df.copy()
     if "Dependents" in df.columns:
         df["Dependents"] = df["Dependents"].replace("3+", 3).astype(int)
 
-    # Identify numeric columns (assumes common numeric features)
     numeric_cols = ["ApplicantIncome", "CoapplicantIncome", "LoanAmount", "Loan_Amount_Term", "Credit_History", "Dependents"]
     cat_cols = [col for col in df.columns if col not in numeric_cols]
 
-    # One-hot encode categorical columns
     df = pd.get_dummies(df, columns=cat_cols, drop_first=False)
 
-    # Fill missing columns with zeros to match model
+    # Fill missing columns to match model
     model_columns = get_model_columns()
     for col in model_columns:
         if col not in df.columns:
             df[col] = 0
-
-    # Reorder columns to match model
     df = df[model_columns]
     return df
 
@@ -65,10 +77,11 @@ def predict_df(model, df: pd.DataFrame):
 def main():
     st.set_page_config(page_title="Loan Eligibility", layout="wide")
     st.title(APP_TITLE)
-    st.caption("Enter features or upload a CSV to get predictions. Input is matched automatically to the model's features.")
+    st.caption("Enter features or upload a CSV to get predictions. Input fields match the trained model automatically.")
 
     model = load_model()
     model_columns = get_model_columns()
+    cat_options = get_categorical_options()
 
     # Sidebar: batch scoring
     st.sidebar.header("📦 Batch scoring")
@@ -85,7 +98,7 @@ def main():
     st.divider()
     st.subheader("🧮 Single prediction")
 
-    # Dynamically generate UI based on model columns
+    # Build dynamic input form
     input_data = {}
     numeric_defaults = {
         "ApplicantIncome": 5000,
@@ -97,12 +110,5 @@ def main():
     }
 
     for col in model_columns:
-        # Skip one-hot dummy columns (they will be created automatically)
-        if "_" in col and col not in numeric_defaults:
-            continue
-        if col in numeric_defaults:
-            input_data[col] = st.number_input(col, min_value=0, value=numeric_defaults[col], step=100)
-        else:
-            # Provide a selectbox for categorical columns
-            # If you know the original categories, replace with correct list
-            input_data[col] = st.selectbox(col, ["Option1", "Option2", "Opti]()_
+        # Skip one-hot encoded dummy columns
+        if "_" in col and col_
