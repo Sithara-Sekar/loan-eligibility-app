@@ -20,6 +20,17 @@ def load_model():
     model = joblib.load(MODEL_PATH)
     return model
 
+def preprocess_input(df: pd.DataFrame):
+    """Convert categorical inputs to numeric format expected by the model."""
+    df = df.copy()
+    df["Gender"] = df["Gender"].map({"Male": 1, "Female": 0})
+    df["Married"] = df["Married"].map({"Yes": 1, "No": 0})
+    df["Education"] = df["Education"].map({"Graduate": 1, "Not Graduate": 0})
+    df["Self_Employed"] = df["Self_Employed"].map({"Yes": 1, "No": 0})
+    df["Property_Area"] = df["Property_Area"].map({"Urban": 2, "Semiurban": 1, "Rural": 0})
+    df["Dependents"] = df["Dependents"].replace("3+", 3).astype(int)
+    return df
+
 def predict_df(model, df: pd.DataFrame):
     preds = model.predict(df)
     proba = None
@@ -50,7 +61,8 @@ def main():
         batch_df = pd.read_csv(batch_file)
         st.sidebar.write("Preview:", batch_df.head())
         if st.sidebar.button("Run batch predictions"):
-            preds = predict_df(model, batch_df)
+            processed_batch = preprocess_input(batch_df)
+            preds = predict_df(model, processed_batch)
             out = pd.concat([batch_df.reset_index(drop=True), preds], axis=1)
             st.write("Batch predictions:", out.head(20))
             st.download_button("Download predictions.csv", data=out.to_csv(index=False), file_name="predictions.csv")
@@ -90,7 +102,8 @@ def main():
     input_df = pd.DataFrame([row])
 
     if st.button("Predict eligibility"):
-        preds = predict_df(model, input_df)
+        processed_input = preprocess_input(input_df)
+        preds = predict_df(model, processed_input)
         st.metric("Prediction", preds.iloc[0]["predict"])
         st.write("Raw prediction output:", preds)
 
