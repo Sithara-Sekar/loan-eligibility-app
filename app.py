@@ -21,9 +21,13 @@ def load_model():
     try:
         obj = joblib.load(MODEL_PATH)
         if isinstance(obj, dict):
-            model = obj.get("model")  # Adjust key based on your pickle file’s structure
-            if model is None:
-                raise ValueError("No scikit-learn model found in the dictionary.")
+            # Try common keys for the model; adjust based on inspection
+            for key in ["model", "estimator", "clf"]:
+                if key in obj:
+                    model = obj[key]
+                    break
+            else:
+                raise ValueError("No scikit-learn model found in dictionary. Tried keys: model, estimator, clf")
         else:
             model = obj
         if not hasattr(model, "predict"):
@@ -46,7 +50,7 @@ def preprocess_input(df: pd.DataFrame):
         cat_cols = ["Gender", "Married", "Education", "Self_Employed", "Property_Area"]
         df = pd.get_dummies(df, columns=cat_cols)
 
-        # Use model’s feature_names_in_ if available, else fallback to hardcoded list
+        # Use model’s feature_names_in_ if available, else fallback
         model = load_model()
         if hasattr(model, "feature_names_in_"):
             model_columns = model.feature_names_in_
