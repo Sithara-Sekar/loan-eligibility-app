@@ -16,64 +16,84 @@ MODEL_PATH = os.path.join("models", "leader_model.pkl")
 @st.cache_resource(show_spinner=False)
 def load_model():
     if not os.path.exists(MODEL_PATH):
+        st.error(f"Could not find '{MODEL_PATH}'. Please ensure the model file exists.")
         raise FileNotFoundError(f"Could not find '{MODEL_PATH}'. Train the model first.")
-    model = joblib.load(MODEL_PATH)
-    return model
+    try:
+        model = joblib.load(MODEL_PATH)
+        return model
+    except Exception as e:
+        st.error(f"Failed to load model: {str(e)}")
+        raise
 
 def preprocess_input(df: pd.DataFrame):
     """Preprocess input to match training schema (one-hot encoding for categoricals)."""
-    df = df.copy()
+    try:
+        df = df.copy()
+        # Validate Dependents
+        valid_dependents = ["0", "1", "2", "3+"]
+        if not df["Dependents"].isin(valid_dependents).all():
+            raise ValueError(f"Dependents must be one of: {', '.join(valid_dependents)}")
+        df["Dependents"] = df["Dependents"].replace("3+", 3).astype(int)
 
-    # Map '3+' to 3 in Dependents
-    df["Dependents"] = df["Dependents"].replace("3+", 3).astype(int)
+        # One-hot encode categorical columns
+        cat_cols = ["Gender", "Married", "Education", "Self_Employed", "Property_Area"]
+        df = pd.get_dummies(df, columns=cat_cols)
 
-    # One-hot encode categorical columns
-    cat_cols = ["Gender", "Married", "Education", "Self_Employed", "Property_Area"]
-    df = pd.get_dummies(df, columns=cat_cols)
+        # Ensure all columns the model expects are present
+        model_columns = load_model().feature_names_in_
+        for col in model_columns:
+            if col not in df.columns:
+                df[col] = 0  # Missing column -> fill with 0
 
-    # Ensure all columns the model expects are present
-    model_columns = load_model().feature_names_in_
-    for col in model_columns:
-        if col not in df.columns:
-            df[col] = 0  # Missing column -> fill with 0
-
-    # Reorder columns to match training
-    df = df[model_columns]
-
-    return df
+        # Reorder columns to match training
+        df = df[model_columns]
+        return df
+    except Exception as e:
+        st.error(f"Preprocessing error: {str(e)}")
+        raise
 
 def predict_df(model, df: pd.DataFrame):
-    df_processed = preprocess_input(df)
-    preds = model.predict(df_processed)
-    proba = None
     try:
-        proba = model.predict_proba(df_processed)
-    except AttributeError:
-        pass
-    preds_df = pd.DataFrame({"predict": preds})
-    if proba is not None:
-        for i, class_label in enumerate(model.classes_):
-            preds_df[f"p_{class_label}"] = proba[:, i]
-    return preds_df
+        df_processed = preprocess_input(df)
+        preds = model.predict(df_processed)
+        proba = None
+        try:
+            proba = model.predict_proba(df_processed)
+        except AttributeError:
+            pass
+        preds_df = pd.DataFrame({"predict": preds})
+        if proba is not None:
+            for i, class_label in enumerate(model.classes_):
+                preds_df[f"p_{class_label}"] = proba[:, i]
+        return preds_df
+    except Exception as e:
+        st.error(f"Prediction error: {str(e)}")
+        raise
 
 def main():
     st.set_page_config(page_title="Loan Eligibility", layout="wide")
     st.title(APP_TITLE)
     st.caption("Enter features or upload a CSV to get predictions. Preprocessing matches training pipeline.")
 
-    model = load_model()
+    try:
+        model = load_model()
+    except Exception:
+        return  # Stop execution if model loading fails
 
     # Batch scoring
     st.sidebar.header("📦 Batch scoring")
     batch_file = st.sidebar.file_uploader("Upload CSV with same features as training (no target).", type=["csv"])
     if batch_file:
-        batch_df = pd.read_csv(batch_file)
-        st.sidebar.write("Preview:", batch_df.head())
-        if st.sidebar.button("Run batch predictions"):
-            preds = predict_df(model, batch_df)
-            out = pd.concat([batch_df.reset_index(drop=True), preds], axis=1)
-            st.write("Batch predictions:", out.head(20))
-            st.download_button("Download predictions.csv", data=out.to_csv(index=False), file_name="predictions.csv")
+        try:
+            batch_df = pd.read_csv(batch_file)
+            st.sidebar.write("Preview:", batch_df.head())
+            if st.sidebar.button("Run batch predictions"):
+                preds = predict_df(model, batch_df)
+                out = pd.concat([batch_df.reset_index(drop=True), preds], axis=1)
+                st.write("Batch predictions:", out.head(20))
+                st.download_button("Download predictions.csv", data=out.to_csv(index=False), file_name="predictions.csv")
+        except Exception as e:
+            st.sidebar.error(f"Batch processing error: {str(e)}")
 
     st.divider()
     st.subheader("🧮 Single prediction")
@@ -107,9 +127,12 @@ def main():
     input_df = pd.DataFrame([row])
 
     if st.button("Predict eligibility"):
-        preds = predict_df(model, input_df)
-        st.metric("Prediction", preds.iloc[0]["predict"])
-        st.write("Raw prediction output:", preds)
+        try:
+            preds = predict_df(model, input_df)
+            st.metric("Prediction", preds.iloc[0]["predict"])
+            st.write("Raw prediction output:", preds)
+        except Exception as e:
+            st.error(f"Prediction error: {str(e)}")
 
     with st.expander("Show input row as DataFrame"):
         st.dataframe(input_df)
